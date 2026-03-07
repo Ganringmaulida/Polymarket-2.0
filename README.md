@@ -491,3 +491,258 @@ src/
 ## License
 
 MIT
+
+
+# Semi-Automated EV Betting Pipeline
+## *A deterministic analysis system for Polymarket sports markets*
+
+---
+
+### Conceptual Overview
+
+This system functions like a **quantitative analyst embedded at a trading desk** — 
+it never pulls the trigger, but ensures the operator has complete, unambiguous information 
+before doing so. Every number in the output is derived from a defined formula; 
+nothing is estimated or guessed.
+
+The pipeline has one job: find markets where the price on Polymarket (Implied Probability) 
+materially undervalues the outcome probability derived from sharp bookmaker consensus 
+(True Probability). That gap is **Edge**. Edge × Volume = Expected Profit.
+
+---
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     EV BETTING PIPELINE                             │
+│                                                                     │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐  │
+│  │  Polymarket  │    │  Odds API    │    │    EV Engine         │  │
+│  │  Fetcher     │    │  Fetcher     │    │                      │  │
+│  │              │    │              │    │  1. Fuzzy-match       │  │
+│  │ CLI subprocess│   │ HTTP calls   │    │     markets          │  │
+│  │ → JSON output │   │ → Sharp odds │    │  2. Remove vig       │  │
+│  │ → Midpoints  │    │ → True Probs │    │  3. Compute edge     │  │
+│  └──────┬───────┘    └──────┬───────┘    │  4. Recommend        │  │
+│         │                   │            └──────────┬───────────┘  │
+│         └──────────┬────────┘                       │              │
+│                    ▼                                 ▼              │
+│              PolymarketMarket[]          EVResult[]                 │
+│                                                   │                 │
+│                                         ┌─────────▼──────────┐     │
+│                                         │  Terminal Reporter  │     │
+│                                         │  + JSON Snapshot   │     │
+│                                         └────────────────────┘     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Installation
+
+#### 1. Install Polymarket CLI
+
+```bash
+# Build from source (requires Rust + Cargo)
+git clone https://github.com/Polymarket/polymarket-cli
+cd polymarket-cli
+cargo install --path .
+cd ..
+
+# Verify
+polymarket --version
+polymarket markets list --limit 3
+```
+
+#### 2. Set Up Python Environment
+
+```bash
+cd ev_pipeline
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+#### 3. Configure API Keys
+
+```bash
+# Option A: Environment variable (recommended)
+export ODDS_API_KEY="your_key_here"
+
+# Option B: Edit config.yaml
+# odds_api:
+#   api_key: "your_key_here"
+```
+
+Get a free API key at: https://the-odds-api.com/ (500 requests/month free)
+
+---
+
+### Usage
+
+#### Single Run
+```bash
+python ev_pipeline.py
+```
+
+#### With Options
+```bash
+python ev_pipeline.py --verbose                    # Debug logging
+python ev_pipeline.py --sport basketball_nba       # NBA only
+python ev_pipeline.py --no-color                   # For log file piping
+python ev_pipeline.py --dry-run                    # Test without API calls
+```
+
+#### Scheduled Runs
+```bash
+# Run continuously — triggers 60min before each kickoff
+python run_scheduler.py
+
+# Fixed-time only (08:00, 14:00, 20:00 UTC)
+python run_scheduler.py --mode fixed
+
+# One immediate run
+python run_scheduler.py --once
+```
+
+#### Cron Integration
+```bash
+# Every day at 17:00 and 20:00 UTC
+0 17,20 * * * cd /path/to/ev_pipeline && source .venv/bin/activate && python ev_pipeline.py --no-color >> /var/log/ev_pipeline.log 2>&1
+```
+
+---
+
+### How EV is Calculated
+
+#### Step 1: Implied Probability (from Polymarket)
+```
+Implied_Prob_Yes = Midpoint price of "Yes" token
+                = polymarket -o json clob midpoint <TOKEN_ID>
+```
+
+#### Step 2: True Probability (from sharp bookmakers)
+```
+1. Pull H2H (moneyline) odds from Pinnacle, DraftKings, FanDuel
+2. Convert American odds → Decimal odds → Raw implied probability
+3. Remove vig via multiplicative method:
+   True_Prob = Raw_Implied_Prob / Sum(All_Raw_Implied_Probs)
+4. Average across all bookmakers → Consensus True Probability
+```
+
+#### Step 3: Edge Calculation
+```
+Edge = True_Prob - Implied_Prob
+
+EV per $1 = Edge
+  (On Polymarket: buying Yes at $0.40 when TP=0.55 means:
+   EV = 0.55 × $0.60 − 0.45 × $0.40 = $0.33 − $0.18 = $0.15 per $1)
+```
+
+#### Step 4: Recommendation Logic
+```python
+if edge_yes > margin_of_safety:   → BUY YES
+elif edge_no > margin_of_safety:  → BUY NO
+else:                             → IGNORE
+```
+
+---
+
+### Sample Output
+
+```
+══════════════════════════════════════════════════════════════════════
+  SEMI-AUTOMATED EV BETTING PIPELINE  ─  ANALYSIS REPORT
+  Run Time       : 2025-03-07 14:00:00 UTC
+  Markets Scanned: 34
+  Sport Events   : 48
+  Edge Threshold : 5.0%  (Margin of Safety)
+══════════════════════════════════════════════════════════════════════
+
+  ╔══ ACTIONABLE OPPORTUNITIES ══╗
+
+  #    MARKET                                     SIDE     TRUE    MKT    EDGE    EV/$  T-
+  ─────────────────────────────────────────────────────────────────────────────────────────
+  1    Will Arsenal beat Chelsea?                 YES     63.2%  55.0%  +8.2%  +0.0820  T-1.2h
+  2    Will Celtics win vs Lakers?                YES     71.5%  65.0%  +6.5%  +0.0650  T-3.8h
+
+──────────────────────────────────────────────────────────────────────
+  #1   [BUY YES ✅]  Will Arsenal beat Chelsea?
+       Odds Event : Arsenal @ Chelsea (soccer_epl) | T-1.2h | Confidence: 94%
+
+       TRUE PROBABILITY   Yes: 63.20%  │  No: 36.80%
+       MARKET (POLYMARKET) Yes: 55.00%  │  No: 45.00%
+
+       EDGE: +8.20%  │  EV per $1: +$0.0820  │  Volume: $125,400  │  Liquidity: $42,000
+       MARKET URL: https://polymarket.com/event/arsenal-vs-chelsea
+
+  ▶  ACTION: BUY YES ✅  │  TOKEN ID: 4833104333661288...
+```
+
+---
+
+### Operational Workflow
+
+```
+1. [SCHEDULER]   Pipeline fires 60 min before kickoff
+        ↓
+2. [READ LOG]    Operator reviews terminal output
+        ↓
+3. [VERIFY]      Operator cross-checks recommendation manually
+        ↓
+4. [EXECUTE]     Operator opens polymarket.com, finds market,
+                 executes BUY order manually in browser
+```
+
+**This system never executes trades.** It is a read-only analysis tool.
+
+---
+
+### Configuration Reference
+
+All settings are in `config.yaml`. Key parameters:
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `ev.margin_of_safety` | `0.05` | Minimum edge to trigger BUY (5%) |
+| `ev.min_polymarket_volume_usd` | `5000` | Filter illiquid markets |
+| `ev.vig_removal_method` | `multiplicative` | Algorithm for removing bookmaker margin |
+| `matching.team_name_similarity_threshold` | `0.65` | Fuzzy match confidence floor |
+| `scheduler.minutes_before_kickoff` | `60` | Lead time for kickoff-triggered runs |
+
+---
+
+### Directory Structure
+
+```
+ev_pipeline/
+├── ev_pipeline.py          ← Main orchestrator (run this)
+├── run_scheduler.py        ← Automated scheduler
+├── config.yaml             ← All configuration
+├── requirements.txt
+│
+├── fetchers/
+│   ├── polymarket_fetcher.py   ← CLI subprocess wrapper
+│   └── odds_fetcher.py         ← The-Odds-API integration
+│
+├── core/
+│   └── ev_engine.py        ← Matching + EV calculation
+│
+├── output/
+│   └── reporter.py         ← Terminal formatting + JSON snapshots
+│
+└── snapshots/              ← JSON output archive (auto-created)
+```
+
+---
+
+### Risk Disclosure
+
+This software is for educational and research purposes.  
+Prediction markets carry financial risk. Past edge does not guarantee future returns.  
+Always verify outputs independently before deploying capital.
+
+---
+
+*MIT License. Built on [Polymarket CLI](https://github.com/Polymarket/polymarket-cli).*

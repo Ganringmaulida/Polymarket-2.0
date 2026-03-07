@@ -1,0 +1,14 @@
+# Kredensial dan Konfigurasi Lokal
+config.yaml
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Data Snapshot & Log
+snapshots/
+*.log
+
+# Virtual Environment (Jika Anda membuatnya nanti)
+venv/
+env/
