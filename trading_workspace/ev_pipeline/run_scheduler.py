@@ -109,31 +109,36 @@ def get_next_fixed_run(config: dict, now: datetime) -> datetime:
 
 
 def scheduler_loop(config: dict, mode: str, config_path: str) -> None:
-    """
-    Main scheduling loop. Runs indefinitely until interrupted.
-    Like a professional timer — always watching, never forgetting.
-    """
     lead_minutes = config["scheduler"]["minutes_before_kickoff"]
-    notified_kickoffs: set[str] = set()   # Prevent duplicate triggers
+    notified_kickoffs: set[str] = set()
+
+    # DITAMBAHKAN: Cache kickoff list dengan TTL 30 menit
+    # Seperti memeriksa jadwal kereta setiap 30 menit, bukan setiap menit.
+    _kickoff_cache: list[datetime] = []
+    _cache_refreshed_at: datetime = datetime.min.replace(tzinfo=timezone.utc)
+    CACHE_TTL_MINUTES = 30
 
     log.info("Scheduler started. Mode: %s | Lead time: %d min", mode, lead_minutes)
 
     while True:
         now = datetime.now(tz=timezone.utc)
-
         triggered = False
 
-        # ── Mode A: Kickoff-based triggers ──────────────────────────────────
         if mode in ("kickoff", "both"):
-            kickoffs = get_upcoming_kickoffs(config)
+            # DIPERBAIKI: Hanya refresh cache jika sudah expired
+            cache_age_minutes = (now - _cache_refreshed_at).total_seconds() / 60
+            if cache_age_minutes >= CACHE_TTL_MINUTES:
+                _kickoff_cache = get_upcoming_kickoffs(config)
+                _cache_refreshed_at = now
+                log.info("Kickoff cache refreshed: %d fixtures loaded", len(_kickoff_cache))
 
-            for kickoff in kickoffs:
+            for kickoff in _kickoff_cache:
                 key = kickoff.isoformat()
                 if key in notified_kickoffs:
                     continue
 
-                time_to_kickoff = (kickoff - now).total_seconds() / 60  # minutes
-                target_window = (lead_minutes - 2, lead_minutes + 2)    # ±2 min window
+                time_to_kickoff = (kickoff - now).total_seconds() / 60
+                target_window = (lead_minutes - 2, lead_minutes + 2)
 
                 if target_window[0] <= time_to_kickoff <= target_window[1]:
                     log.info(
@@ -144,19 +149,17 @@ def scheduler_loop(config: dict, mode: str, config_path: str) -> None:
                     notified_kickoffs.add(key)
                     triggered = True
 
-        # ── Mode B: Fixed-time triggers ──────────────────────────────────────
         if mode in ("fixed", "both"):
             next_fixed = get_next_fixed_run(config, now)
             delta_sec = (next_fixed - now).total_seconds()
 
-            if delta_sec <= 30:  # within 30 seconds of scheduled time
+            if delta_sec <= 30:
                 log.info("Fixed trigger: %s", next_fixed.strftime("%H:%M UTC"))
                 run_pipeline_now(config_path)
                 triggered = True
-                time.sleep(60)  # Prevent double-trigger within same minute
+                time.sleep(60)
 
         if not triggered:
-            # Sleep 60s between checks. Low overhead, sufficient granularity.
             time.sleep(60)
 
 

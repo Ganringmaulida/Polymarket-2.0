@@ -66,12 +66,19 @@ class TerminalReporter:
         self.snapshot_dir  = Path(config["output"]["json_snapshot_dir"])
         self.margin        = config["ev"]["margin_of_safety"]
 
-        # Setup file logger if configured
+        # DIPERBAIKI: Cek apakah FileHandler ke file yang sama sudah terpasang
+        # sebelum menambahkan yang baru, mencegah duplikasi log pada long-running process.
         if self.log_file:
-            fh = logging.FileHandler(self.log_file, mode="a", encoding="utf-8")
-            fh.setLevel(logging.INFO)
-            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-            logging.getLogger().addHandler(fh)
+            root_logger = logging.getLogger()
+            already_attached = any(
+                isinstance(h, logging.FileHandler) and h.baseFilename == str(Path(self.log_file).resolve())
+                for h in root_logger.handlers
+            )
+            if not already_attached:
+                fh = logging.FileHandler(self.log_file, mode="a", encoding="utf-8")
+                fh.setLevel(logging.INFO)
+                fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+                root_logger.addHandler(fh)
 
     def _c(self, text: str, *codes: str) -> str:
         return _c(text, *codes, use_color=self.colored)

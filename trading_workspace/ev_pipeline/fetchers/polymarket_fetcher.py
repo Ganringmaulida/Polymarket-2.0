@@ -68,7 +68,6 @@ class PolymarketFetcher:
         """
         Execute a polymarket CLI command with JSON output.
         Returns parsed JSON or None on failure.
-        Think of this as making a phone call: if no answer, retry.
         """
         cmd = [self.binary, "-o", "json"] + args
         logger.debug("Running CLI: %s", " ".join(cmd))
@@ -110,10 +109,6 @@ class PolymarketFetcher:
     def get_midpoint(self, token_id: str) -> Optional[float]:
         """
         Fetch the midpoint price for a single token ID.
-        Returns a float (0.0–1.0) representing implied probability.
-
-        CLI equiv: polymarket -o json clob midpoint <TOKEN_ID>
-        Expected JSON: {"mid": "0.52"}
         """
         data = self._run(["clob", "midpoint", token_id])
         if not data:
@@ -127,11 +122,6 @@ class PolymarketFetcher:
     def get_batch_midpoints(self, token_ids: list[str]) -> dict[str, float]:
         """
         Fetch midpoints for multiple tokens in one CLI call.
-        Analogous to sending one email with many questions vs
-        sending a separate email per question.
-
-        CLI equiv: polymarket -o json clob midpoints "ID1,ID2,..."
-        Returns: {token_id: midpoint_float}
         """
         if not token_ids:
             return {}
@@ -142,8 +132,17 @@ class PolymarketFetcher:
             return {}
 
         result: dict[str, float] = {}
-        # Response is a list of {token_id, mid} objects
-        if isinstance(data, list):
+
+        # DIPERBAIKI: Response adalah dict flat {token_id_str: mid_str}
+        if isinstance(data, dict):
+            for token_id_str, mid_val in data.items():
+                try:
+                    result[token_id_str] = float(mid_val)
+                except (TypeError, ValueError):
+                    logger.warning("Cannot parse midpoint for token %s: %s",
+                                   token_id_str, mid_val)
+        # FALLBACK: Jika struktur CLI lama terdeteksi (List of Objects)
+        elif isinstance(data, list):
             for item in data:
                 tid = item.get("token_id") or item.get("tokenId")
                 mid = item.get("mid")
@@ -152,15 +151,17 @@ class PolymarketFetcher:
                         result[str(tid)] = float(mid)
                     except (TypeError, ValueError):
                         pass
+        else:
+            logger.warning(
+                "Unexpected midpoints response type: %s (expected dict or list)",
+                type(data).__name__,
+            )
+
         return result
 
     def search_sports_markets(self, query: str = "") -> list[dict]:
         """
         Search Polymarket for active sports markets.
-        Returns raw list of market dicts from CLI JSON output.
-
-        CLI equiv: polymarket -o json markets list --active true
-                   --limit N
         """
         # TELAH DIPERBAIKI: Parameter --order dihapus agar diterima oleh API
         args = [
@@ -177,7 +178,7 @@ class PolymarketFetcher:
         for m in data:
             tags = [t.get("label", "").lower() for t in m.get("tags", [])]
             question = m.get("question", "").lower()
-            # Include if sports tag or common sports keywords
+            
             is_sports = (
                 self.sports_tag in tags
                 or any(kw in question for kw in [
@@ -206,7 +207,7 @@ class PolymarketFetcher:
             volume = float(market_raw.get("volumeNum", 0) or 0)
             liquidity = float(market_raw.get("liquidityNum", 0) or 0)
 
-            # Extract token IDs — Polymarket binary markets have clobTokenIds
+            # Extract token IDs
             clob_token_ids: list[str] = market_raw.get("clobTokenIds", [])
             outcomes: list[str] = market_raw.get("outcomes", ["Yes", "No"])
 
@@ -257,7 +258,6 @@ class PolymarketFetcher:
     def fetch_all_sports_markets(self) -> list[PolymarketMarket]:
         """
         Full pipeline: search → enrich with live prices.
-        This is the primary entry point for the fetcher module.
         """
         raw_markets = self.search_sports_markets()
         if not raw_markets:

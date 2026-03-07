@@ -321,7 +321,6 @@ class EVCalculator:
         # By convention: Polymarket sports questions are typically
         # phrased as "Will [Team A] win?" where Yes = Team A wins.
         # We identify which team is Team A via the matcher extraction.
-        teams = MarketMatcher(None).QUESTION_PATTERNS  # only for reference
         extracted = self.matcher._extract_teams_from_question(market.question)
 
         if extracted:
