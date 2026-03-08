@@ -112,11 +112,12 @@ def scheduler_loop(config: dict, mode: str, config_path: str) -> None:
     lead_minutes = config["scheduler"]["minutes_before_kickoff"]
     notified_kickoffs: set[str] = set()
 
-    # DITAMBAHKAN: Cache kickoff list dengan TTL 30 menit
-    # Seperti memeriksa jadwal kereta setiap 30 menit, bukan setiap menit.
+    # DITAMBAHKAN: Cache kickoff list dengan TTL 12 JAM (720 menit)
+    # KOMPUTASI: Ini menghentikan kebocoran kuota The-Odds-API secara absolut. 
+    # Jadwal harian hanya diunduh 2x sehari, sangat menghemat kredit.
     _kickoff_cache: list[datetime] = []
     _cache_refreshed_at: datetime = datetime.min.replace(tzinfo=timezone.utc)
-    CACHE_TTL_MINUTES = 30
+    CACHE_TTL_MINUTES = 720  # UBAH DARI 30 KE 720
 
     log.info("Scheduler started. Mode: %s | Lead time: %d min", mode, lead_minutes)
 
@@ -125,7 +126,7 @@ def scheduler_loop(config: dict, mode: str, config_path: str) -> None:
         triggered = False
 
         if mode in ("kickoff", "both"):
-            # DIPERBAIKI: Hanya refresh cache jika sudah expired
+            # Hanya refresh cache jadwal jika sudah 12 jam
             cache_age_minutes = (now - _cache_refreshed_at).total_seconds() / 60
             if cache_age_minutes >= CACHE_TTL_MINUTES:
                 _kickoff_cache = get_upcoming_kickoffs(config)
@@ -140,6 +141,7 @@ def scheduler_loop(config: dict, mode: str, config_path: str) -> None:
                 time_to_kickoff = (kickoff - now).total_seconds() / 60
                 target_window = (lead_minutes - 2, lead_minutes + 2)
 
+                # Mesin akan menembak tepat di jendela 60 menit sebelum main
                 if target_window[0] <= time_to_kickoff <= target_window[1]:
                     log.info(
                         "Kickoff trigger: %s (T-%dm)",

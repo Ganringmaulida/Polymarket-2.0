@@ -14,7 +14,9 @@ if not list_of_files:
     st.warning("Belum ada data snapshot. Jalankan eksekusi utama (ev_pipeline.py) terlebih dahulu.")
     st.stop()
 
-latest_file = max(list_of_files, key=os.path.getctime)
+# FIX D3a: getctime di Linux mengembalikan inode change time, bukan creation time.
+# getmtime (modification time) konsisten di semua OS.
+latest_file = max(list_of_files, key=os.path.getmtime)
 
 with open(latest_file, 'r') as f:
     data = json.load(f)
@@ -22,8 +24,11 @@ with open(latest_file, 'r') as f:
 st.subheader("Ringkasan Komputasi Terakhir")
 col1, col2, col3 = st.columns(3)
 col1.metric("Waktu Eksekusi (UTC)", data.get("run_time", "N/A"))
-col2.metric("Rekomendasi BUY Ditemukan", data.get("actionable_recommendations", 0))
-col3.metric("Data Bersumber", latest_file.split('\\')[-1])
+# FIX B1: key yang ditulis reporter.py baris 275 adalah "buy_recommendations"
+# bukan "actionable_recommendations" — penyebab output selalu = 0
+col2.metric("Rekomendasi BUY Ditemukan", data.get("buy_recommendations", 0))
+# FIX D3b: split('\\') tidak berfungsi di Linux. os.path.basename() cross-platform.
+col3.metric("Data Bersumber", os.path.basename(latest_file))
 
 st.markdown("---")
 

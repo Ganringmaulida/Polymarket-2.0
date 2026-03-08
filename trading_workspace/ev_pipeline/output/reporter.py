@@ -17,9 +17,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import requests
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+  
+
 
 from core.ev_engine import EVResult, Recommendation
 
@@ -305,3 +309,49 @@ class TerminalReporter:
 
         logger.info("JSON snapshot saved: %s", fpath)
         return fpath
+    
+    def send_telegram_alert(config: dict, result: dict) -> None:
+        """Mengirim data EV ke Telegram menggunakan HTTP POST request."""
+        tg_config = config.get("telegram", {})
+        if not tg_config.get("enabled", False):
+         return
+
+        bot_token = tg_config.get("bot_token")
+        chat_id = tg_config.get("chat_id")
+    
+        if not bot_token or not chat_id:
+            logging.error("Telegram credentials missing in config.yaml.")
+            return
+
+    # Ekstraksi data komputasi
+        market_name = result.get("market_question", "Unknown Market")
+        outcome = result.get("recommended_outcome", "YES/NO")
+        edge = result.get("edge", 0) * 100
+        poly_price = result.get("polymarket_price", 0)
+        true_prob = result.get("true_probability", 0)
+    
+    # Format HTML
+        message = (
+            f"🚨 <b>EV ALERT</b> 🚨\n\n"
+            f"<b>Market:</b> {market_name}\n"
+            f"<b>Action:</b> BUY {outcome}\n"
+            f"<b>Edge:</b> {edge:.2f}%\n\n"
+            f"📊 <b>Metrik:</b>\n"
+            f"Harga Polymarket : {poly_price:.3f}\n"
+            f"Probabilitas Bandar : {true_prob:.3f}\n"
+        )
+
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+
+        try:
+            response = requests.post(url, json=payload, timeout=5)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logging.error("Gagal mengirim notifikasi Telegram: %s", e)
+            
+            
